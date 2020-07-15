@@ -27,8 +27,6 @@
 #define LV_CHART_PNUM_DEF 10
 #define LV_CHART_AXIS_MAJOR_TICK_LEN_COE 1 / 15
 #define LV_CHART_AXIS_MINOR_TICK_LEN_COE 2 / 3
-#define LV_CHART_AXIS_PRIMARY_Y 1
-#define LV_CHART_AXIS_SECONDARY_Y 0
 #define LV_CHART_LABEL_ITERATOR_FORWARD 1
 #define LV_CHART_LABEL_ITERATOR_REVERSE 0
 
@@ -101,8 +99,12 @@ lv_obj_t * lv_chart_create(lv_obj_t * par, const lv_obj_t * copy)
 
     _lv_ll_init(&ext->series_ll, sizeof(lv_chart_series_t));
 
-    ext->ymin                  = LV_CHART_YMIN_DEF;
-    ext->ymax                  = LV_CHART_YMAX_DEF;
+    uint8_t i;
+    for(i = 0; i < _LV_CHART_AXIS_LAST; i++) {
+        ext->ymin[i]                  = LV_CHART_YMIN_DEF;
+        ext->ymax[i]                  = LV_CHART_YMAX_DEF;
+    }
+
     ext->hdiv_cnt              = LV_CHART_HDIV_DEF;
     ext->vdiv_cnt              = LV_CHART_VDIV_DEF;
     ext->point_cnt             = LV_CHART_PNUM_DEF;
@@ -118,7 +120,6 @@ lv_obj_t * lv_chart_create(lv_obj_t * par, const lv_obj_t * copy)
     ext->secondary_y_axis.major_tick_len = LV_CHART_TICK_LENGTH_AUTO;
     ext->secondary_y_axis.minor_tick_len = LV_CHART_TICK_LENGTH_AUTO;
 
-
     lv_style_list_init(&ext->style_series_bg);
     lv_style_list_init(&ext->style_series);
 
@@ -133,7 +134,6 @@ lv_obj_t * lv_chart_create(lv_obj_t * par, const lv_obj_t * copy)
         lv_obj_set_size(chart, LV_DPI * 3, LV_DPI * 2);
 
         lv_theme_apply(chart, LV_THEME_CHART);
-
     }
     else {
         lv_chart_ext_t * ext_copy = lv_obj_get_ext_attr(copy);
@@ -142,11 +142,11 @@ lv_obj_t * lv_chart_create(lv_obj_t * par, const lv_obj_t * copy)
         lv_style_list_copy(&ext->style_series_bg, &ext_copy->style_series_bg);
 
         ext->type       = ext_copy->type;
-        ext->ymin       = ext_copy->ymin;
-        ext->ymax       = ext_copy->ymax;
         ext->hdiv_cnt   = ext_copy->hdiv_cnt;
         ext->vdiv_cnt   = ext_copy->vdiv_cnt;
         ext->point_cnt  = ext_copy->point_cnt;
+        _lv_memcpy_small(ext->ymin, ext_copy->ymin, sizeof(ext->ymin));
+        _lv_memcpy_small(ext->ymax, ext_copy->ymax, sizeof(ext->ymax));
         _lv_memcpy(&ext->x_axis, &ext_copy->x_axis, sizeof(lv_chart_axis_cfg_t));
         _lv_memcpy(&ext->y_axis, &ext_copy->y_axis, sizeof(lv_chart_axis_cfg_t));
         _lv_memcpy(&ext->secondary_y_axis, &ext_copy->secondary_y_axis, sizeof(lv_chart_axis_cfg_t));
@@ -191,6 +191,8 @@ lv_chart_series_t * lv_chart_add_series(lv_obj_t * chart, lv_color_t color)
     }
 
     ser->start_point = 0;
+    ser->ext_buf_assigned = false;
+    ser->y_axis = LV_CHART_AXIS_PRIMARY_Y;
 
     uint16_t i;
     lv_coord_t * p_tmp = ser->points;
@@ -248,20 +250,26 @@ void lv_chart_set_div_line_count(lv_obj_t * chart, uint8_t hdiv, uint8_t vdiv)
 }
 
 /**
- * Set the minimal and maximal y values
+ * Set the minimal and maximal y values on an axis
  * @param chart pointer to a graph background object
+ * @param axis `LV_CHART_AXIS_PRIMARY_Y` or `LV_CHART_AXIS_SECONDARY_Y`
  * @param ymin y minimum value
  * @param ymax y maximum value
  */
-void lv_chart_set_range(lv_obj_t * chart, lv_coord_t ymin, lv_coord_t ymax)
+void lv_chart_set_y_range(lv_obj_t * chart, lv_chart_axis_t axis, lv_coord_t ymin, lv_coord_t ymax)
 {
     LV_ASSERT_OBJ(chart, LV_OBJX_NAME);
 
-    lv_chart_ext_t * ext = lv_obj_get_ext_attr(chart);
-    if(ext->ymin == ymin && ext->ymax == ymax) return;
+    if(axis >= _LV_CHART_AXIS_LAST) {
+        LV_LOG_WARN("Invalid axis: %d", axis);
+        return;
+    }
 
-    ext->ymin = ymin;
-    ext->ymax = ymax;
+    lv_chart_ext_t * ext = lv_obj_get_ext_attr(chart);
+    if(ext->ymin[axis] == ymin && ext->ymax[axis] == ymax) return;
+
+    ext->ymin[axis] = ymin;
+    ext->ymax[axis] = ymax;
 
     lv_chart_refresh(chart);
 }
@@ -599,6 +607,28 @@ void lv_chart_set_point_id(lv_obj_t * chart, lv_chart_series_t * ser, lv_coord_t
     ser->points[id] = value;
 }
 
+/**
+ * Set the Y axis of a series
+ * @param chart pointer to a chart object
+ * @param ser pointer to series
+ * @param axis `LV_CHART_AXIS_PRIMARY_Y` or `LV_CHART_AXIS_SECONDARY_Y`
+ */
+void lv_chart_set_series_axis(lv_obj_t * chart, lv_chart_series_t * ser, lv_chart_axis_t axis)
+{
+    LV_ASSERT_OBJ(chart, LV_OBJX_NAME);
+    LV_ASSERT_NULL(ser);
+
+    if(axis >= _LV_CHART_AXIS_LAST) {
+        LV_LOG_WARN("Invalid axis: %d", axis);
+        return;
+    }
+
+    if( ser->y_axis == axis) return;
+
+    ser->y_axis = axis;
+    lv_chart_refresh(chart);
+}
+
 /*=====================
  * Getter functions
  *====================*/
@@ -651,7 +681,7 @@ uint16_t lv_chart_get_x_start_point(lv_chart_series_t * ser)
 lv_coord_t lv_chart_get_point_id(lv_obj_t * chart, lv_chart_series_t * ser, uint16_t id)
 {
     LV_ASSERT_OBJ(chart, LV_OBJX_NAME);
-    LV_ASSERT_NULL(serie);
+    LV_ASSERT_NULL(ser);
 
     lv_chart_ext_t * ext = lv_obj_get_ext_attr(chart);
     if( id >= ext->point_cnt ) id = 0;
@@ -659,6 +689,19 @@ lv_coord_t lv_chart_get_point_id(lv_obj_t * chart, lv_chart_series_t * ser, uint
 
 }
 
+/**
+ * Get the Y axis of a series
+ * @param chart pointer to a chart object
+ * @param ser pointer to series
+ * @return `LV_CHART_AXIS_PRIMARY_Y` or `LV_CHART_AXIS_SECONDARY_Y`
+ */
+lv_chart_axis_t lv_chart_get_series_axis(lv_obj_t * chart, lv_chart_series_t * ser)
+{
+    LV_ASSERT_NULL(ser);
+    LV_UNUSED(chart);
+
+    return ser->y_axis;
+}
 /*=====================
  * Other functions
  *====================*/
@@ -740,11 +783,15 @@ static lv_res_t lv_chart_signal(lv_obj_t * chart, lv_signal_t sign, void * param
 
     if(sign == LV_SIGNAL_CLEANUP) {
         lv_chart_series_t * ser;
-        _LV_LL_READ(ext->series_ll, ser) {
-            lv_mem_free(ser->points);
-            lv_mem_free(ser);
-        }
-        _lv_ll_clear(&ext->series_ll);
+        while( ext->series_ll.head != NULL ) {
+        	ser =_lv_ll_get_head(&ext->series_ll);
+
+        	if(!ser->ext_buf_assigned) lv_mem_free(ser->points);
+
+			_lv_ll_remove(&ext->series_ll, ser);
+			lv_mem_free(ser);
+		}
+		_lv_ll_clear(&ext->series_ll);
 
         lv_obj_clean_style_list(chart, LV_CHART_PART_SERIES);
         lv_obj_clean_style_list(chart, LV_CHART_PART_SERIES_BG);
@@ -926,8 +973,8 @@ static void draw_series_line(lv_obj_t * chart, const lv_area_t * series_area, co
 
         lv_coord_t p_act = start_point;
         lv_coord_t p_prev = start_point;
-        int32_t y_tmp = (int32_t)((int32_t)ser->points[p_prev] - ext->ymin) * h;
-        y_tmp  = y_tmp / (ext->ymax - ext->ymin);
+        int32_t y_tmp = (int32_t)((int32_t)ser->points[p_prev] - ext->ymin[ser->y_axis]) * h;
+        y_tmp  = y_tmp / (ext->ymax[ser->y_axis] - ext->ymin[ser->y_axis]);
         p2.y   = h - y_tmp + y_ofs;
 
         for(i = 0; i < ext->point_cnt; i++) {
@@ -938,8 +985,8 @@ static void draw_series_line(lv_obj_t * chart, const lv_area_t * series_area, co
 
             p_act = (start_point + i) % ext->point_cnt;
 
-            y_tmp = (int32_t)((int32_t)ser->points[p_act] - ext->ymin) * h;
-            y_tmp = y_tmp / (ext->ymax - ext->ymin);
+            y_tmp = (int32_t)((int32_t)ser->points[p_act] - ext->ymin[ser->y_axis]) * h;
+            y_tmp = y_tmp / (ext->ymax[ser->y_axis] - ext->ymin[ser->y_axis]);
             p2.y  = h - y_tmp + y_ofs;
 
             /*Don't draw the first point. A second point is also required to draw the line*/
@@ -1062,8 +1109,8 @@ static void draw_series_column(lv_obj_t * chart, const lv_area_t * series_area, 
             col_dsc.bg_color = ser->color;
 
             lv_coord_t p_act = (start_point + i) % ext->point_cnt;
-            y_tmp            = (int32_t)((int32_t)ser->points[p_act] - ext->ymin) * h;
-            y_tmp            = y_tmp / (ext->ymax - ext->ymin);
+            y_tmp            = (int32_t)((int32_t)ser->points[p_act] - ext->ymin[ser->y_axis]) * h;
+            y_tmp            = y_tmp / (ext->ymax[ser->y_axis] - ext->ymin[ser->y_axis]);
             col_a.y1         = h - y_tmp + series_area->y1;
 
             if(ser->points[p_act] != LV_CHART_POINT_DEF) {
@@ -1460,6 +1507,9 @@ static void invalidate_lines(lv_obj_t * chart, uint16_t i)
 
     lv_area_t coords;
     lv_area_copy(&coords, &series_area);
+    coords.y1 -= line_width + point_radius;
+    coords.y2 += line_width + point_radius;
+
     if(i < ext->point_cnt - 1) {
         coords.x1 = ((w * i) / (ext->point_cnt - 1)) + x_ofs - line_width - point_radius;
         coords.x2 = ((w * (i + 1)) / (ext->point_cnt - 1)) + x_ofs + line_width + point_radius;
